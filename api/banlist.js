@@ -1,81 +1,77 @@
-const protobuf = require("protobufjs");
-const crypto = require("crypto");
+import { Redis } from '@upstash/redis';
+import CryptoJS from 'crypto-js';
 
-// The JSON Data you want to send
-const jsonData = {
-    playerId: "null",
-    action: "login",
-    timestamp: Date.now()
-};
+const redis = Redis.fromEnv();
+const ADMIN_KEY = "Xk9vP2mQ8zL5wR7tY4nB6cD1fG3hJ0aS"; 
+const AES_KEY = "MySuperSecretKey123"; // MUST MATCH YOUR GAME
 
-async function sendSecureRequest() {
+export default async function handler(req, res) {
+  // CORS Headers
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.status(200).end();
+
+  // ==========================================
+  // GAME CHECKS BAN (Encrypted Request)
+  // ==========================================
+  if (req.method === 'GET') {
     try {
-        // 1. PROTOBUF SERIALIZATION
-        // We define the schema in code for this example
-        const root = protobuf.Root.fromJSON({
-            nested: {
-                GameRequest: {
-                    fields: {
-                        playerId: { type: "string", id: 1 },
-                        action: { type: "string", id: 2 },
-                        timestamp: { type: "double", id: 3 }
-                    }
-                }
-            }
-        });
-        
-        const GameRequest = root.lookupType("GameRequest");
-        
-        // Validate and Serialize JSON to Protobuf Buffer
-        const errMsg = GameRequest.verify(jsonData);
-        if (errMsg) throw Error(errMsg);
-        
-        const message = GameRequest.create(jsonData);
-        const protoBuffer = GameRequest.encode(message).finish();
-        console.log("1. Serialized to Protobuf:", protoBuffer.toString('hex'));
+      // 1. Get the encrypted payload from the URL
+      const encryptedPayload = req.query.payload; 
+      if (!encryptedPayload) return res.status(400).json({ error: "No payload" });
 
-        // 2. AES ENCRYPTION
-        // You MUST have the original game's key and IV here
-        const aesKey = Buffer.from("0123456789abcdef0123456789abcdef", "hex"); // 32 bytes for AES-256
-        const iv = Buffer.from("0123456789abcdef", "hex"); // 16 bytes
-        
-        const cipher = crypto.createCipheriv("aes-256-cbc", aesKey, iv);
-        let encrypted = cipher.update(protoBuffer);
-        encrypted = Buffer.concat([encrypted, cipher.final()]);
-        console.log("2. Encrypted Payload:", encrypted.toString('hex'));
+      // 2. Decrypt the payload
+      const decryptedBytes = CryptoJS.AES.decrypt(encryptedPayload, AES_KEY);
+      const playerId = decryptedBytes.toString(CryptoJS.enc.Utf8);
 
-        // 3. HTTPS REQUEST
-        const targetUrl = "https://freefiremobile.com/api/login"; // Example URL
-        
-        console.log(`3. Sending HTTPS Request to ${targetUrl}...`);
-        
-        // We send the encrypted buffer as the body
-        const response = await fetch(targetUrl, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/octet-stream',
-                'User-Agent': 'GameClient/1.0'
-            },
-            body: encrypted
-        });
+      // 3. Check Database
+      const bannedUsers = await redis.get('banned_users') || [];
+      const banDurationMs = 24 * 60 * 60 * 1000; // 24 Hours
+      const now = Date.now();
+      
+      const userBan = bannedUsers.find(ban => ban.id === playerId);
 
-        // 4. DESERIALIZATION (Server Response)
-        const responseBuffer = Buffer.from(await response.arrayBuffer());
-        
-        // Decrypt the response
-        const decipher = crypto.createDecipheriv("aes-256-cbc", aesKey, iv);
-        let decrypted = decipher.update(responseBuffer);
-        decrypted = Buffer.concat([decrypted, decipher.final()]);
-        
-        // Decode Protobuf back to JSON
-        const decodedResponse = GameRequest.decode(decrypted);
-        const finalJson = GameRequest.toObject(decodedResponse);
-        
-        console.log("4. Server Response (Decrypted JSON):", finalJson);
+      let responseData = { isBanned: false };
+
+      if (userBan) {
+        const expireTime = userBan.bannedAt + banDurationMs;
+        if (now <= expireTime) {
+          responseData = { 
+            isBanned: true, 
+            reason: userBan.reason,
+            timeLeftMs: expireTime - now 
+          };
+        }
+      }
+
+      // 4. Encrypt the response before sending it back
+      const encryptedResponse = CryptoJS.AES.encrypt(JSON.stringify(responseData), AES_KEY).toString();
+      return res.status(200).json({ data: encryptedResponse });
 
     } catch (error) {
-        console.error("Pipeline failed:", error.message);
+      return res.status(500).json({ error: "Server error or bad decryption" });
     }
-}
+  }
 
-sendSecureRequest();
+  // ==========================================
+  // ADMIN BANS USER (Plain JSON for easy Admin use)
+  // ==========================================
+  if (req.method === 'POST') {
+    if (req.headers.authorization !== `Bearer ${ADMIN_KEY}`) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const { id, reason } = req.body;
+    try {
+      let bannedUsers = await redis.get('banned_users') || [];
+      if (!bannedUsers.find(b => b.id === id)) {
+        bannedUsers.push({ id, reason: reason || "No reason", bannedAt: Date.now() });
+        await redis.set('banned_users', bannedUsers);
+      }
+      return res.status(200).json({ success: true });
+    } catch (error) {
+      return res.status(500).json({ error: "Database error" });
+    }
+  }
+}
