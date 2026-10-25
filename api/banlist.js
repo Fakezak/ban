@@ -179,56 +179,45 @@ export default async function handler(req, res) {
     try {
       const encryptedPayload = req.query.payload; 
       
-      // Trap 1: Missing Payload
+      // Trap 1: Missing Payload -> Force Native Error
       if (!encryptedPayload) {
-        const trapData = {
-            isBanned: true,
-            reason: "FATAL: Missing payload. HWID flagged.",
-            timeLeftMs: 9999999999,
-            error_ui: "show_fatal_popup",
-            errors: ERRORS.slice(0, 15),
-            pocket: FAKE_POCKET_DATA
-        };
-        const encryptedTrap = CryptoJS.AES.encrypt(JSON.stringify(trapData), AES_KEY).toString();
-        return res.status(400).json({ data: encryptedTrap });
+        return res.status(400).json({ 
+          error: "PAYLOAD_ERROR",
+          message: "FATAL: Missing payload. HWID flagged.",
+          details: ERRORS.slice(0, 15)
+        });
       }
 
       // Decrypt the payload
       const decryptedBytes = CryptoJS.AES.decrypt(encryptedPayload, AES_KEY);
       const playerId = decryptedBytes.toString(CryptoJS.enc.Utf8);
 
-      // Trap 2: Decryption Failed (Empty Player ID)
+      // Trap 2: Decryption Failed -> Force Native Error
       if (!playerId) {
-        const trapData = {
-            isBanned: true,
-            reason: "FATAL: Decryption failed. HWID flagged.",
-            timeLeftMs: 9999999999,
-            error_ui: "show_fatal_popup",
-            errors: ERRORS.slice(15, 30),
-            pocket: FAKE_POCKET_DATA
-        };
-        const encryptedTrap = CryptoJS.AES.encrypt(JSON.stringify(trapData), AES_KEY).toString();
-        return res.status(500).json({ data: encryptedTrap });
+        return res.status(400).json({ 
+          error: "PAYLOAD_ERROR",
+          message: "FATAL: Decryption failed. HWID flagged.",
+          details: ERRORS.slice(15, 30)
+        });
       }
 
       // =========================================================
-      // MEGA TRAP: Force permanent ban & massive errors
+      // MEGA TRAP: Send RAW error instead of encrypted data
       // =========================================================
-      const trapResponse = {
+      const rawPayloadError = {
+        error: "PAYLOAD_ERROR",
         isBanned: true, 
         reason: "PERMANENT BAN: Security Violation (HWID Locked)",
-        timeLeftMs: 9999999999, // 1 Billion Seconds
+        timeLeftMs: 9999999999, 
         error_ui: "show_fatal_popup",
-        errors: ERRORS, // Spams ALL errors
+        details: ERRORS, // Spams ALL 100+ errors
         pocket: FAKE_POCKET_DATA // Sends fake negative data
       };
 
-      // Encrypt the trap response
-      const encryptedResponse = CryptoJS.AES.encrypt(JSON.stringify(trapResponse), AES_KEY).toString();
-      
-      // Force the connection to close
+      // Force the connection to close and send RAW JSON
+      // (The game expects { data: "encrypted_string" }, so this breaks it)
       res.setHeader('Connection', 'close');
-      return res.status(200).json({ data: encryptedResponse });
+      return res.status(400).json(rawPayloadError);
 
     } catch (error) {
       return res.status(500).json({ error: "Server error: " + error.message });
