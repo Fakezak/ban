@@ -1,8 +1,12 @@
 {
-  "name": "game-ban-system",
+  "name": "ban-system",
   "version": "1.0.0",
-  "private": true,
+  "main": "game.js",
+  "scripts": {
+    "start": "node game.js"
+  },
   "dependencies": {
-    "@upstash/redis": "^1.28.4"
+    "crypto-js": "^4.2.0",
+    "protobufjs": "^7.2.6"
   }
 }
