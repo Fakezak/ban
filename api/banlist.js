@@ -1,33 +1,55 @@
 import { Redis } from '@upstash/redis';
 
-// Upstash automatically reads your environment variables
 const redis = Redis.fromEnv();
-const ADMIN_KEY = "Xk9vP2mQ8zL5wR7tY4nB6cD1fG3hJ0aS";
+const ADMIN_KEY = "Xk9vP2mQ8zL5wR7tY4nB6cD1fG3hJ0aS"; 
 
 export default async function handler(req, res) {
-  // 1. GAME READS LIST
+  // ==========================================
+  // 1. GAME CHECKS IF A SPECIFIC USER IS BANNED
+  // ==========================================
   if (req.method === 'GET') {
+    // Get the user ID from the URL (e.g., ?id=ZakaCheatv18)
+    const userId = req.query.id; 
+    
+    if (!userId) {
+      return res.status(400).json({ error: "Please provide a user ID" });
+    }
+
     try {
       const bannedUsers = await redis.get('banned_users') || [];
       const banDurationDays = 3;
       const now = Date.now();
       
-      const activeBans = bannedUsers.filter(ban => {
-        const expireTime = ban.bannedAt + (banDurationDays * 24 * 60 * 60 * 1000);
-        return now < expireTime;
+      // Look for THIS specific user
+      const userBan = bannedUsers.find(ban => ban.id === userId);
+
+      if (!userBan) {
+        // Not banned at all
+        return res.status(200).json({ isBanned: false });
+      }
+
+      // Check if their time is up
+      const expireTime = userBan.bannedAt + (banDurationDays * 24 * 60 * 60 * 1000);
+      if (now > expireTime) {
+        // Time is up, they are free
+        return res.status(200).json({ isBanned: false });
+      }
+
+      // They are banned! Send back the ban details.
+      return res.status(200).json({ 
+        isBanned: true, 
+        reason: userBan.reason,
+        bannedAt: userBan.bannedAt
       });
 
-      return res.status(200).json({
-        version: now,
-        banDurationDays: banDurationDays,
-        banned: activeBans
-      });
     } catch (error) {
-      return res.status(500).json({ error: "Database connection failed", details: error.message });
+      return res.status(500).json({ error: "Database connection failed" });
     }
   }
 
-  // 2. ADMIN BANS USER
+  // ==========================================
+  // 2. ADMIN BANS A USER (SAME AS BEFORE)
+  // ==========================================
   if (req.method === 'POST') {
     const authHeader = req.headers.authorization;
     if (authHeader !== `Bearer ${ADMIN_KEY}`) {
@@ -50,7 +72,7 @@ export default async function handler(req, res) {
       }
       return res.status(200).json({ success: true, message: `Banned ${id} for 3 days` });
     } catch (error) {
-      return res.status(500).json({ error: "Failed to save ban", details: error.message });
+      return res.status(500).json({ error: "Failed to save ban" });
     }
   }
 
