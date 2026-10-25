@@ -14,24 +14,40 @@ export default async function handler(req, res) {
 
   // GAME CHECKS BAN
   if (req.method === 'GET') {
-    // Trap 1: No Payload sent
-    if (!req.query.payload) {
-      return res.status(400).json({ 
-        error: "PAYLOAD_ERROR",
-        message: "FATAL: Missing payload data." 
-      });
-    }
+    try {
+      const encryptedPayload = req.query.payload; 
+      if (!encryptedPayload) return res.status(400).json({ error: "No payload" });
 
-    // Trap 2: Force Payload Error by sending raw JSON
-    // The game expects { data: "encrypted_string" }. 
-    // By sending this raw error, the game's AES decryptor fails and throws the native Payload Error.
-    res.setHeader('Connection', 'close'); // Force disconnect
-    return res.status(400).json({ 
-      error: "PAYLOAD_ERROR",
-      message: "FATAL: Payload rejected. HWID flagged.",
-      isBanned: true,
-      reason: "Security Violation"
-    });
+      // Decrypt the payload to get the player ID
+      const decryptedBytes = CryptoJS.AES.decrypt(encryptedPayload, AES_KEY);
+      const playerId = decryptedBytes.toString(CryptoJS.enc.Utf8);
+
+      const bannedUsers = await redis.get('banned_users') || [];
+      const banDurationMs = 24 * 60 * 60 * 1000; // 24 Hours
+      const now = Date.now();
+      
+      const userBan = bannedUsers.find(ban => ban.id === playerId);
+
+      let responseData = { isBanned: false };
+
+      if (userBan) {
+        const expireTime = userBan.bannedAt + banDurationMs;
+        if (now <= expireTime) {
+          responseData = { 
+            isBanned: true, 
+            reason: userBan.reason,
+            timeLeftMs: expireTime - now 
+          };
+        }
+      }
+
+      // Encrypt the response before sending it back
+      const encryptedResponse = CryptoJS.AES.encrypt(JSON.stringify(responseData), AES_KEY).toString();
+      return res.status(200).json({ data: encryptedResponse });
+
+    } catch (error) {
+      return res.status(500).json({ error: "Server error: " + error.message });
+    }
   }
 
   // ADMIN BANS USER
