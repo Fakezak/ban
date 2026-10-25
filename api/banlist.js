@@ -8,7 +8,6 @@ export default async function handler(req, res) {
   // 1. GAME CHECKS IF A SPECIFIC USER IS BANNED
   // ==========================================
   if (req.method === 'GET') {
-    // Get the user ID from the URL (e.g., ?id=ZakaCheatv18)
     const userId = req.query.id; 
     
     if (!userId) {
@@ -17,29 +16,32 @@ export default async function handler(req, res) {
 
     try {
       const bannedUsers = await redis.get('banned_users') || [];
-      const banDurationDays = 3;
+      
+      // CHANGE 1: Set to 24 Hours (24 * 60 * 60 * 1000)
+      const banDurationMs = 24 * 60 * 60 * 1000; 
       const now = Date.now();
       
       // Look for THIS specific user
       const userBan = bannedUsers.find(ban => ban.id === userId);
 
       if (!userBan) {
-        // Not banned at all
         return res.status(200).json({ isBanned: false });
       }
 
-      // Check if their time is up
-      const expireTime = userBan.bannedAt + (banDurationDays * 24 * 60 * 60 * 1000);
+      // Check if their 24 hours are up
+      const expireTime = userBan.bannedAt + banDurationMs;
       if (now > expireTime) {
-        // Time is up, they are free
+        // Time is up, they are free! (Auto-Unban)
         return res.status(200).json({ isBanned: false });
       }
 
-      // They are banned! Send back the ban details.
+      // They are banned! Calculate exactly how much time is left
+      const timeLeftMs = expireTime - now;
+
       return res.status(200).json({ 
         isBanned: true, 
         reason: userBan.reason,
-        bannedAt: userBan.bannedAt
+        timeLeftMs: timeLeftMs // Send the exact milliseconds left to the game
       });
 
     } catch (error) {
@@ -48,7 +50,7 @@ export default async function handler(req, res) {
   }
 
   // ==========================================
-  // 2. ADMIN BANS A USER (SAME AS BEFORE)
+  // 2. ADMIN BANS A USER
   // ==========================================
   if (req.method === 'POST') {
     const authHeader = req.headers.authorization;
@@ -70,7 +72,7 @@ export default async function handler(req, res) {
         });
         await redis.set('banned_users', bannedUsers);
       }
-      return res.status(200).json({ success: true, message: `Banned ${id} for 3 days` });
+      return res.status(200).json({ success: true, message: `Banned ${id} for 24 Hours` });
     } catch (error) {
       return res.status(500).json({ error: "Failed to save ban" });
     }
